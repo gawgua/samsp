@@ -1,7 +1,9 @@
 from solver.solver import SATSolver, SOLVER_STATUS
 from dataset.problems import SAMSPProblem
 
+import time
 import networkx as nx
+
 
 class TEMP:
     def __init__(self, problem: SAMSPProblem, LB=None, UB=None):
@@ -9,6 +11,8 @@ class TEMP:
         self.__problem = problem
         self.__LB = LB
         self.__UB = UB
+
+        self.__int_to_node = {v: k for k, v in self.__problem.node_id.items()}
 
         self.__preprocessing()
 
@@ -32,7 +36,12 @@ class TEMP:
             makespan = (low + high) // 2
             print(f"Trying makespan <= {makespan}")
             self.__solver.clear_assumptions()
-            self.__solver.add_assumption([-self.S[self.__problem.number_of_activities - 1, t] for t in range(makespan + 1, self.__UB + 1)])
+            self.__solver.add_assumption(
+                [
+                    -self.S[self.__problem.number_of_activities - 1, t]
+                    for t in range(makespan + 1, self.__UB + 1)
+                ]
+            )
 
             result = self.__solver.solve()
             if result is None:
@@ -60,7 +69,9 @@ class TEMP:
         scheduling = self.get_scheduling()
         if scheduling is None:
             return None
-        last_start_time = scheduling[0, 1]
+        # Retrieve the scheduling time of the Super-Sink
+        super_sink_tuple = self.__int_to_node[self.__problem.number_of_activities - 1]
+        last_start_time = scheduling[super_sink_tuple]
         return last_start_time
 
     def get_scheduling(self):
@@ -71,10 +82,10 @@ class TEMP:
         for i in range(self.__problem.number_of_activities):
             for t in range(self.__ES[i], self.__LS[i] + 1):
                 if model[self.S[i, t] - 1] > 0:
-                    for (session, activity), node in self.__problem.node_id.items():
-                        if node == i:
-                            scheduling[(session, activity)] = t
-                            break
+                    # Look up the tuple key using O(1) dictionary instead of looping
+                    tuple_key = self.__int_to_node[i]
+                    scheduling[tuple_key] = t
+                    break
         return scheduling
 
     def __preprocessing(self):
@@ -91,15 +102,16 @@ class TEMP:
             raise e
 
         self.__extended_precedence_graph = nx.DiGraph()
-        for u in shortest_paths:
-            for v in shortest_paths[u]:
-                if u != v and shortest_paths[u][v] != float("inf"):
+        for u_tuple in shortest_paths:
+            for v_tuple in shortest_paths[u_tuple]:
+                if u_tuple != v_tuple and shortest_paths[u_tuple][v_tuple] != float(
+                    "inf"
+                ):
+                    u_int = self.__problem.node_id[u_tuple]
+                    v_int = self.__problem.node_id[v_tuple]
                     self.__extended_precedence_graph.add_edge(
-                        u, v, weight=-shortest_paths[u][v]
+                        u_int, v_int, weight=-shortest_paths[u_tuple][v_tuple]
                     )
-        # print("Extended precedence graph edges with weights:")
-        # for u, v, data in self.__extended_precedence_graph.edges(data=True):
-        #     print(f"Edge from {u} to {v} with weight {data['weight']}")
 
         # Calculate LB, UB
         LB = self.__extended_precedence_graph[0][
@@ -110,19 +122,24 @@ class TEMP:
 
         UB = 0
         for i in range(self.__problem.number_of_activities):
-            # max between duration of i or  max time lag of (i,j) for all j in successors of i
+            # Map index 'i' to tuple to fetch successors from original graph, then map back to int
+            i_tuple = self.__int_to_node[i]
+            successors_tuples = self.__problem.precedence_graph.successors(i_tuple)
+            successors_int = [
+                self.__problem.node_id[j_tuple] for j_tuple in successors_tuples
+            ]
+
             UB += max(
                 self.__problem.durations[i],
                 *[
                     self.__extended_precedence_graph[i][j]["weight"]
-                    for j in self.__problem.precedence_graph.successors(i)
+                    for j in successors_int
                 ]
                 + [0],
             )
 
         if self.__UB is None or self.__UB > UB or self.__UB < self.__LB:
             self.__UB = UB
-        
 
         print(f"LB: {self.__LB}, UB: {self.__UB}")
 
@@ -180,72 +197,69 @@ class TEMP:
             for t in range(self.__UB + 1):
                 running_total += usages.get(t, 0)
                 self.__PS[r, t] = running_total
-        print(f"Prefix sums of cumulative resources: {self.__PS}")
+        # print(f"Prefix sums of cumulative resources: {self.__PS}")
 
     def __first_activity(self):
         # First activity is always started at time 0
         self.add_clause([self.S[0, 0]])
-        # print("Added clause: S(0, 0) is True")
 
     def __activity_start_in_range(self):
-        # sequential counter for activity start time in range [ES, LS]
-        for i in range(self.__problem.number_of_activities):
-            # AMO (sequential counter)
-            if (i, self.__ES[i], self.__ES[i]) not in self.register:
-                self.register[i, self.__ES[i], self.__ES[i]] = (
-                    self.__solver.create_new_variable()
-                )
-
-            # Si,ESi => R(Ai, ESi, ESi)
-            self.add_clause(
-                [-self.S[i, self.__ES[i]], self.register[i, self.__ES[i], self.__ES[i]]]
-            )
-
-            # Si,t ^ R(Ai, ESi, t-1) => R(Ai, ESi, t), R(Ai, ESi, t-1) => ~Si,t
-            for t in range(self.__ES[i] + 1, self.__LS[i] + 1):
-                if (i, self.__ES[i], t) not in self.register:
-                    self.register[i, self.__ES[i], t] = (
-                        self.__solver.create_new_variable()
+        for i in range(1, self.__problem.number_of_activities):
+                    self.__solver.add_clause(
+                        [
+                            self.__get_forward_staircase_register(
+                                i, self.__ES[i], self.__LS[i] + 1
+                            )
+                        ]
                     )
-                self.add_clause(
-                    [-self.S[i, t], self.register[i, self.__ES[i], t]]
-                )
-                self.add_clause(
-                    [
-                        -self.register[i, self.__ES[i], t - 1],
-                        self.register[i, self.__ES[i], t],
-                    ]
-                )
-
-                self.add_clause(
-                    [-self.register[i, self.__ES[i], t - 1], -self.S[i, t]]
-                )
-
-            # ALO (Big OR)
-            self.add_clause(
-                [self.S[i, t] for t in range(self.__ES[i], self.__LS[i] + 1)]
-            )
-
-            # print(
-            #     f"Added clauses for activity {i} to start in range [{self.__ES[i]}, {self.__LS[i]}]"
-            # )
 
     def __precedence_constraints(self):
-        # Sj - Si >= li,j for all (i, j, l) in graph
-        for i, j in self.__extended_precedence_graph.edges():
-            l = self.__extended_precedence_graph[i][j]["weight"]
-            # print(f"Adding precedence constraint: S({j}) - S({i}) >= {l}")
-
-            for t in range(self.__ES[j], self.__LS[j] + 1):
-                if t - l < self.__ES[i]:
-                    # then j cannot start as i cannot start
-                    self.add_clause([-self.y[j, t]])
-                elif t - l > self.__LS[i]:
-                    # contraint alway true
-                    continue
-                else:
-                    # if y(j, t) then y(i, t - l)
-                    self.add_clause([-self.y[j, t], self.y[i, t - l]])
+        for predecessor in range(1, self.__problem.number_of_activities):
+            for successor in self.__extended_precedence_graph.successors(predecessor):
+                # Precedence constraint
+                for k in range(self.__ES[successor], self.__LS[successor] + 1):
+                    if (
+                        k
+                        - self.__extended_precedence_graph[predecessor][successor].get(
+                            "weight"
+                        )
+                        + 1
+                        >= self.__LS[predecessor] + 1
+                    ):
+                        continue
+                    first_half = self.__get_forward_staircase_register(
+                        successor, self.__ES[successor], k + 1
+                    )
+                    t = (
+                        k
+                        - self.__extended_precedence_graph[predecessor][successor].get(
+                            "weight"
+                        )
+                        + 1
+                    )
+                    if t < self.__ES[predecessor]:
+                        t = self.__ES[predecessor]
+                    self.__solver.add_clause(
+                        [-first_half, -self.S[predecessor, t]]
+                    )
+                for k in range(
+                    self.__LS[successor]
+                    - self.__extended_precedence_graph[predecessor][successor].get(
+                        "weight"
+                    )
+                    + 2,
+                    self.__LS[predecessor] + 1,
+                ):
+                    self.__solver.add_clause(
+                        [
+                            -self.__get_forward_staircase_register(
+                                successor,
+                                self.__ES[successor],
+                                self.__LS[successor] + 1,
+                            ),
+                            -self.S[predecessor, k],
+                        ]
+                    )
 
     def __auxiliary_variables_constraints(self):
         # x(ai,t) = 1 if and only if S(ai,t') = 1 for some t' in [t - di + 1, t]
@@ -267,9 +281,6 @@ class TEMP:
                     min(t, self.__LS[i]) + 1,
                 ):
                     self.add_clause([-self.S[i, t_prime], self.x[i, t]])
-                # print(
-                #     f"Added auxiliary variable constraints for x({i},{t}) = {self.x[i, t]}"
-                # )
 
         # y(ai,t) = 1 if and only if S(ai,t') = 1 for some t' in [ESi, t]
         for i in range(self.__problem.number_of_activities):
@@ -280,9 +291,6 @@ class TEMP:
                 )
                 for t_prime in range(self.__ES[i], t + 1):
                     self.add_clause([-self.S[i, t_prime], self.y[i, t]])
-                # print(
-                #     f"Added auxiliary variable constraints for y({i},{t}) = {self.y[i, t]}"
-                # )
 
     def __renewable_resources_constraints(self):
         for r in range(self.__problem.number_of_renewable_resources):
@@ -305,9 +313,7 @@ class TEMP:
                         self.add_clause([-activities_using_r_at_t[k], R[k]])
                         self.add_clause([-R[k - 1], R[k]])
 
-                        self.add_clause(
-                            [-R[k - 1], -activities_using_r_at_t[k]]
-                        )
+                        self.add_clause([-R[k - 1], -activities_using_r_at_t[k]])
 
                     self.add_clause(
                         [
@@ -315,12 +321,10 @@ class TEMP:
                             -activities_using_r_at_t[-1],
                         ]
                     )
-            # print(f"Added renewable resource constraints for resource {r}")
 
     def __cummulative_resources_constraints(self):
         # usage at t of r <= capacity of r - ps of r
         for r in range(self.__problem.number_of_cumulative_resources):
-            # print(f"Adding cumulative resource constraints for resource {r}")
 
             for t in range(self.__UB + 1):
                 lits = []
@@ -335,10 +339,6 @@ class TEMP:
                             weights.append(c)
                     elif c < 0:
                         if self.__EC[i] <= t < self.__LC[i]:
-                            # !y(i, t - di) = True -> Ai still occupied
-                            # weight = -c,
-                            # if Ai not occupied at t, then limit += -c to increase the limit
-                            # if Ai occupied at t, then Ai still take c resource at t, increase the left of inquation by c, balance the added limit
                             w = -c
                             t_finish = t - self.__problem.durations[i]
 
@@ -353,3 +353,55 @@ class TEMP:
 
                 if lits:
                     self.__solver.add_at_most_k(lits, weights, limit)
+
+    def __get_forward_staircase_register(
+        self, job: int, start: int, end: int
+    ) -> int | None:
+        """Get forward staircase register for a job for a range of time [start, end)"""
+        # Check if current job with provided start and end time is already in the register
+        if start >= end:
+            return None
+        temp = tuple(self.S[(job, s)] for s in range(start, end))
+        if temp in self.register:
+            return self.register[temp]
+        # Store the start time of the job
+        accumulative = []
+        for s in range(start, end):
+            accumulative.append(self.S[(job, s)])
+            current_tuple = tuple(accumulative)
+            # If the current tuple is not in the register, create a new variable
+            if current_tuple not in self.register:
+                # Create a new variable for the current tuple
+                self.register[current_tuple] = self.__solver.create_new_variable()
+                # Create constraint for staircase
+                # If current tuple is true then the register associated with it must be true
+                self.__solver.add_clause(
+                    [-self.S[(job, s)], self.register[current_tuple]]
+                )
+                if s == start:
+                    self.__solver.add_clause(
+                        [self.S[(job, s)], -self.register[current_tuple]]
+                    )
+                else:
+                    # Get the previous tuple
+                    previous_tuple = tuple(accumulative[:-1])
+                    # If previous tuple is true then the current register must be true
+                    self.__solver.add_clause(
+                        [
+                            -self.register[previous_tuple],
+                            self.register[current_tuple],
+                        ]
+                    )
+                    # Both previous tuple and current variable is false then current tuple must be false
+                    self.__solver.add_clause(
+                        [
+                            self.register[previous_tuple],
+                            self.S[(job, s)],
+                            -self.register[current_tuple],
+                        ]
+                    )
+                    # Previous tuple and current variable must not be true at the same time
+                    self.__solver.add_clause(
+                        [-self.register[previous_tuple], -self.S[(job, s)]]
+                    )
+        return self.register[temp]
