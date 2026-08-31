@@ -1,9 +1,7 @@
 from solver.solver import SATSolver, SOLVER_STATUS
 from dataset.problems import SAMSPProblem
 
-import time
 import networkx as nx
-
 
 class TEMP:
     def __init__(self, problem: SAMSPProblem, LB=None, UB=None):
