@@ -75,15 +75,15 @@ class TEMP:
         for i in range(self.__problem.number_of_activities):
             for t in range(self.__problem.ES[i], self.__problem.LS[i] + 1):
                 self.S[i, t] = self.__solver.create_new_variable()
-            self.x = {}  # x(ai,t) activity i is running at time t
+        self.x = {}  # x(ai,t) activity i is running at time t
         for i in range(self.__problem.number_of_activities):
             for t in range(self.__problem.ES[i], self.__problem.LC[i] + 1):
                 self.x[i, t] = self.__solver.create_new_variable()
-            self.y = {}  # y(ai,t) activity i is started before or at time t
+        self.y = {}  # y(ai,t) activity i is started before or at time t
         for i in range(self.__problem.number_of_activities):
             for t in range(self.__problem.ES[i], self.__problem.LS[i] + 1):
                 self.y[i, t] = self.__solver.create_new_variable()
-            self.register = {}  # R(Ai, s, t) activity i is started in time range [s, t]
+        self.register = {}  # R(Ai, s, t) activity i is started in time range [s, t]
 
     def __first_activity(self):
         # First activity is always started at time 0

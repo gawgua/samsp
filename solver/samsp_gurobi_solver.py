@@ -4,173 +4,87 @@ from dataset.problems import SAMSPProblem
 
 
 class SAMSPGurobiSolver:
-    """Compact time-indexed Gurobi model for SAMSP."""
+    """Gurobi translation of SAMSPMILPSolver's time-indexed model."""
 
     def __init__(self, problem: SAMSPProblem):
         self.problem = problem
-        self.model = Model(name="SAMSP_model")
+        self.model = Model(name="SAMSP_GUROBI")
         self._model_built = False
 
         self.x = self.model.addVars(
             [
-                (activity_id, start_time)
-                for activity_id in self.problem.activity_ids
-                for start_time in range(
-                    self.problem.ES[activity_id],
-                    self.problem.LS[activity_id] + 1,
-                )
+                (i, t)
+                for i in range(self.problem.number_of_activities)
+                for t in range(self.problem.ES[i], self.problem.LC[i] + 1)
             ],
             vtype=GRB.BINARY,
             name="x",
         )
-        self._storage_activities = [
-            activity_id
-            for activity_id in self.problem.activity_ids
-            if any(self.problem.cumulative_requests[activity_id])
-        ]
-        self.y = self.model.addVars(
-            [
-                (activity_id, time_point)
-                for activity_id in self._storage_activities
-                for time_point in range(
-                    self.problem.ES[activity_id],
-                    self.problem.LS[activity_id],
-                )
-            ],
-            lb=0,
-            ub=1,
-            vtype=GRB.CONTINUOUS,
-            name="started",
-        )
-        self.start_time = {
-            activity_id: quicksum(
-                start_time * self.x[activity_id, start_time]
-                for start_time in range(
-                    self.problem.ES[activity_id],
-                    self.problem.LS[activity_id] + 1,
-                )
-            )
-            for activity_id in self.problem.activity_ids
-        }
 
     def build_model(self):
         if self._model_built:
             return self.model
 
-        for activity_id in self.problem.activity_ids:
-            self.model.addConstr(
-                quicksum(
-                    self.x[activity_id, start_time]
-                    for start_time in range(
-                        self.problem.ES[activity_id],
-                        self.problem.LS[activity_id] + 1,
-                    )
-                )
-                == 1,
-                name=f"activity_{activity_id}_scheduled_once",
-            )
+        # Every activity must be scheduled exactly once.
+        for i in range(self.problem.number_of_activities):
+            x_i = [self.x[(i, t)] for t in range(self.problem.ES[i], self.problem.LS[i] + 1)]
+            self.model.addConstr(quicksum(x_i) == 1)
 
-        self.model.addConstr(
-            self.start_time[self.problem.source_id] == 0,
-            name="source_starts_at_zero",
-        )
-        self._add_started_by_constraints()
+        # Precedence constraints.
+        for u, v, data in self.problem.extended_precedence_graph.edges(data=True):
+            lag = data.get("weight", 0)
+            tx_u = [t * self.x[(u, t)] for t in range(self.problem.ES[u], self.problem.LS[u] + 1)]
+            tx_v = [t * self.x[(v, t)] for t in range(self.problem.ES[v], self.problem.LS[v] + 1)]
+            self.model.addConstr(quicksum(tx_v) - quicksum(tx_u) >= lag)
 
-        for predecessor, successor, lag in self.problem.precedence_graph.edges(
-            data="weight", default=0
-        ):
-            self.model.addConstr(
-                self.start_time[successor] - self.start_time[predecessor] >= lag,
-                name=f"lag_{predecessor}_{successor}",
-            )
+        # Renewable resource constraints.
+        for r in range(self.problem.number_of_renewable_resources):
+            B_r = 1
+            for t in range(0, self.problem.UB + 1):
+                activities_at_t = []
+                for i in range(self.problem.number_of_activities):
+                    if self.problem.ES[i] <= t < self.problem.LC[i] and self.problem.renewable_requests[i][r] > 0:
+                        b_ir = self.problem.renewable_requests[i][r]
+                        p_i = self.problem.durations[i]
+                        for z in range(max(self.problem.ES[i], t - p_i + 1), t + 1):
+                            activities_at_t.append(b_ir * self.x[(i, z)])
 
-        for resource_id, capacity in enumerate(
-            self.problem.renewable_capacities
-        ):
-            for time_point in range(self.problem.UB):
-                active_terms = []
-                for activity_id in self.problem.activity_ids:
-                    demand = self.problem.renewable_requests[activity_id][resource_id]
-                    if demand <= 0:
-                        continue
-                    duration = self.problem.durations[activity_id]
-                    for start_time in range(
-                        max(
-                            self.problem.ES[activity_id],
-                            time_point - duration + 1,
-                        ),
-                        min(time_point, self.problem.LS[activity_id]) + 1,
-                    ):
-                        active_terms.append(
-                            demand * self.x[activity_id, start_time]
-                        )
-                if active_terms:
+                if activities_at_t:
+                    self.model.addConstr(quicksum(activities_at_t) <= B_r)
+
+        # Cumulative resource constraints.
+        for r in range(self.problem.number_of_cumulative_resources):
+            for t in range(0, self.problem.UB + 1):
+                storage_occupy = []
+                storage_release = []
+                for i in range(self.problem.number_of_activities):
+                    c_ir = self.problem.cumulative_requests[i][r]
+                    if c_ir > 0 and self.problem.ES[i] <= t < self.problem.LS[i]:
+                        for z in range(self.problem.ES[i], t + 1):
+                            storage_occupy.append(c_ir * self.x[(i, z)])
+                    elif c_ir < 0 and self.problem.EC[i] <= t < self.problem.LC[i]:
+                        for z in range(self.problem.EC[i], t + 1):
+                            storage_release.append(c_ir * self.x[(i, z - self.problem.durations[i])])
+
+                if storage_occupy or storage_release:
                     self.model.addConstr(
-                        quicksum(active_terms) <= capacity,
-                        name=f"renewable_{resource_id}_{time_point}",
-                    )
-
-        for storage_id, capacity in enumerate(
-            self.problem.cumulative_capacities
-        ):
-            for time_point in range(self.problem.UB + 1):
-                occupancy_terms = []
-                for activity_id in self._storage_activities:
-                    delta = self.problem.cumulative_requests[activity_id][storage_id]
-                    if delta > 0:
-                        occupancy_terms.append(
-                            delta * self._started_by(activity_id, time_point)
-                        )
-                    elif delta < 0:
-                        occupancy_terms.append(
-                            delta
-                            * self._started_by(
-                                activity_id,
-                                time_point - self.problem.durations[activity_id],
-                            )
-                        )
-                if occupancy_terms:
-                    occupancy = quicksum(occupancy_terms)
-                    self.model.addConstr(
-                        occupancy >= 0,
-                        name=f"storage_lower_{storage_id}_{time_point}",
-                    )
-                    self.model.addConstr(
-                        occupancy <= capacity,
-                        name=f"storage_upper_{storage_id}_{time_point}",
+                        self.problem.PS[r, t] + quicksum(storage_occupy) + quicksum(storage_release)
+                        <= self.problem.cumulative_capacities[r]
                     )
 
         self.model.setObjective(
-            self.start_time[self.problem.sink_id], GRB.MINIMIZE
+            quicksum(
+                t * self.x[(self.problem.number_of_activities - 1, t)]
+                for t in range(
+                    self.problem.ES[self.problem.number_of_activities - 1],
+                    self.problem.LS[self.problem.number_of_activities - 1] + 1,
+                )
+            ),
+            GRB.MINIMIZE,
         )
+
         self._model_built = True
         return self.model
-
-    def _add_started_by_constraints(self):
-        for activity_id in self._storage_activities:
-            earliest = self.problem.ES[activity_id]
-            latest = self.problem.LS[activity_id]
-            if earliest >= latest:
-                continue
-            self.model.addConstr(
-                self.y[activity_id, earliest]
-                == self.x[activity_id, earliest],
-                name=f"started_first_{activity_id}",
-            )
-            for time_point in range(earliest + 1, latest):
-                self.model.addConstr(
-                    self.y[activity_id, time_point]
-                    == self.y[activity_id, time_point - 1]
-                    + self.x[activity_id, time_point],
-                    name=f"started_{activity_id}_{time_point}",
-                )
-
-    def _started_by(self, activity_id, time_point):
-        if time_point < self.problem.ES[activity_id]:
-            return 0
-        if time_point >= self.problem.LS[activity_id]:
-            return 1
-        return self.y[activity_id, time_point]
 
     def solve(self):
         self.model.optimize()
@@ -184,13 +98,10 @@ class SAMSPGurobiSolver:
         if self.model.SolCount == 0:
             return None
         return {
-            activity_id: next(
-                start_time
-                for start_time in range(
-                    self.problem.ES[activity_id],
-                    self.problem.LS[activity_id] + 1,
-                )
-                if self.x[activity_id, start_time].X > 0.5
+            i: next(
+                t
+                for t in range(self.problem.ES[i], self.problem.LS[i] + 1)
+                if self.x[i, t].X > 0.5
             )
-            for activity_id in self.problem.activity_ids
+            for i in range(self.problem.number_of_activities)
         }
