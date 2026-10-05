@@ -56,7 +56,7 @@ class SAMSPMILPSolver:
 
         # Cumulative resource constraints
         for r in range(self.problem.number_of_cumulative_resources):
-            for t in range(self.problem.LB, self.problem.UB + 1):
+            for t in range(0, self.problem.UB + 1):
                 storage_occupy = []
                 storage_release = []
                 for i in range(self.problem.number_of_activities):

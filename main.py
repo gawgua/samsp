@@ -1,5 +1,4 @@
 from solver.temp import TEMP as SAMSPSATSolver
-# from solver.samsp_sat_solver import SAMSPSATSolver
 from solver.samsp_cp_solver import SAMSPCPSolver
 from solver.samsp_milp_solver import SAMSPMILPSolver
 from dataset.problems import SAMSPProblem
@@ -7,7 +6,7 @@ from dataset.problems import SAMSPProblem
 import time
 
 if __name__ == "__main__":
-    problem = SAMSPProblem.from_file(r"./test.sm.txt")
+    problem = SAMSPProblem.from_json(r"./test.json")
     samsp_sat_solver = SAMSPSATSolver(problem)
     samsp_cp_solver = SAMSPCPSolver(problem)
     samsp_milp_solver = SAMSPMILPSolver(problem)
@@ -32,10 +31,8 @@ if __name__ == "__main__":
     
     if model:
         makespan = samsp_sat_solver.get_makespan()
-        scheduling = samsp_sat_solver.get_scheduling()
         
         print(f"Makespan: {makespan}")
-        print(f"Scheduling: {scheduling}")
         print(f"Stats: {samsp_sat_solver.get_statistics()}")
 
     print("\nSolving with CP Solver...")

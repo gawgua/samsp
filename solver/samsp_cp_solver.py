@@ -30,17 +30,24 @@ class SAMSPCPSolver:
         self.__preprocessing()
 
     def __preprocessing(self):
-        """Pair cumulative-resource gets and releases for each session."""
+        """Pair storage gets and releases using the JSON activity IDs."""
         graph = self.problem.precedence_graph
 
-        nodes_by_session = {}
-        for index in range(self.problem.number_of_activities):
-            node = self.problem.int_to_node(index)
-            test_type, session, _ = node
-            if session:
-                nodes_by_session.setdefault((test_type, session), []).append(index)
+        # Dataset tests are listed consecutively and finish with empty storage.
+        groups = []
+        indexes = []
+        balance = [0] * self.problem.number_of_cumulative_resources
+        for index in self.problem.activity_ids[1:-1]:
+            indexes.append(index)
+            for resource_index, delta in enumerate(self.problem.cumulative_requests[index]):
+                balance[resource_index] += delta
+            if not any(balance):
+                groups.append(indexes)
+                indexes = []
+        if indexes:
+            groups.append(indexes)
 
-        for (test_type, session), indexes in nodes_by_session.items():
+        for indexes in groups:
             for resource_index in range(self.problem.number_of_cumulative_resources):
                 gets = [
                     index
@@ -55,7 +62,7 @@ class SAMSPCPSolver:
                 if len(gets) != len(releases):
                     raise ValueError(
                         f"Unmatched cumulative resource {resource_index + 1} "
-                        f"events in session {session}"
+                        f"events in activity group starting at {indexes[0]}"
                     )
                 if not gets:
                     continue
@@ -65,7 +72,7 @@ class SAMSPCPSolver:
                     for release in releases:
                         try:
                             distances[get, release] = nx.shortest_path_length(
-                                graph, self.problem.int_to_node(get), self.problem.int_to_node(release)
+                                graph, get, release
                             )
                         except nx.NetworkXNoPath:
                             distances[get, release] = float("inf")
@@ -83,14 +90,12 @@ class SAMSPCPSolver:
                 ):
                     raise ValueError(
                         f"Could not match cumulative resource {resource_index + 1} "
-                        f"events in session {session}"
+                        f"events in activity group starting at {indexes[0]}"
                     )
                 self.storage_events.extend(
                     (
-                        test_type,
-                        session,
-                        self.problem.int_to_node(get)[2],
-                        self.problem.int_to_node(release)[2],
+                        get,
+                        release,
                         resource_index + 1,
                     )
                     for get, release in zip(gets, pairing)
@@ -101,13 +106,12 @@ class SAMSPCPSolver:
             return self.model
 
         for index in range(self.problem.number_of_activities):
-            node = self.problem.int_to_node(index)
             self.tasks[index] = self.model.interval_var(
-                size=self.problem.durations[index], name=f"Task_{node}"
+                size=self.problem.durations[index], name=f"Task_{index}"
             )
 
-        source_index = self.problem.node_id_to_int((0, 0, 0))
-        sink_index = self.problem.node_id_to_int((0, 0, 1))
+        source_index = self.problem.source_id
+        sink_index = self.problem.sink_id
         self.global_source = self.tasks[source_index]
         self.global_sink = self.tasks[sink_index]
         self.model.add(start_of(self.global_source) == 0)
@@ -115,8 +119,8 @@ class SAMSPCPSolver:
         for predecessor, successor, data in self.problem.precedence_graph.edges(data=True):
             self.model.add(
                 start_before_start(
-                    self.tasks[self.problem.node_id_to_int(predecessor)],
-                    self.tasks[self.problem.node_id_to_int(successor)],
+                    self.tasks[predecessor],
+                    self.tasks[successor],
                     data.get("weight", 0),
                 )
             )
@@ -130,15 +134,13 @@ class SAMSPCPSolver:
                 )
             )
 
-        for test_type, session, start_job, end_job, resource_index in self.storage_events:
-            start_index = self.problem.node_id_to_int((test_type, session, start_job))
-            end_index = self.problem.node_id_to_int((test_type, session, end_job))
+        for start_index, end_index, resource_index in self.storage_events:
             occupancy = self.model.interval_var(
                 size=(0, self._horizon()),
-                name=f"Occupancy_{session}_{start_job}_{end_job}_{resource_index}",
+                name=f"Occupancy_{start_index}_{end_index}_{resource_index}",
             )
             self.occupancy[
-                (test_type, session, start_job, end_job, resource_index)
+                (start_index, end_index, resource_index)
             ] = occupancy
             self.model.add(start_at_start(occupancy, self.tasks[start_index]))
             self.model.add(end_at_end(occupancy, self.tasks[end_index]))
@@ -147,7 +149,7 @@ class SAMSPCPSolver:
             resource_usage = sum(
                 pulse(occupancy, 1)
                 for event, occupancy in self.occupancy.items()
-                if event[4] == resource_index
+                if event[2] == resource_index
             )
             self.model.add(resource_usage <= capacity)
 

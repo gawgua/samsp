@@ -60,27 +60,14 @@ class TEMP:
         return self.__solver.get_last_feasible_model()
 
     def get_makespan(self):
-        scheduling = self.get_scheduling()
-        if scheduling is None:
-            return None
-        # Retrieve the scheduling time of the Super-Sink
-        super_sink_tuple = self.__problem.int_to_node(self.__problem.number_of_activities - 1)
-        last_start_time = scheduling[super_sink_tuple]
-        return last_start_time
-
-    def get_scheduling(self):
         model = self.get_last_feasible_model()
-        if not model:
+        if model is None:
             return None
-        scheduling = {}
-        for i in range(self.__problem.number_of_activities):
-            for t in range(self.__problem.ES[i], self.__problem.LS[i] + 1):
-                if model[self.S[i, t] - 1] > 0:
-                    # Look up the tuple key using O(1) dictionary instead of looping
-                    tuple_key = self.__problem.int_to_node(i)
-                    scheduling[tuple_key] = t
-                    break
-        return scheduling
+        sink = self.__problem.sink_id
+        for t in range(self.__problem.ES[sink], self.__problem.LS[sink] + 1):
+            if model[self.S[sink, t] - 1] > 0:
+                return t
+        return None
 
     def __preprocessing(self):
         # Auxiliary variables
