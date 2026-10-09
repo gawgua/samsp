@@ -61,6 +61,10 @@ class SATSolver:
     def get_last_feasible_model(self) -> list[int] | None:
         return self.__last_feasible_model
 
+    def get_clauses(self):
+        """Return the staged hard formula in the native SAT insertion order."""
+        return sorted(self.__temp_clauses, key=lambda t: (len(t), t))
+
     def get_model(self) -> list[int] | None:
         return self.__solver.get_model()
 

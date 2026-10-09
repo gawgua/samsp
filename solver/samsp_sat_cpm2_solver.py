@@ -1,12 +1,18 @@
 from solver.solver import SATSolver, SOLVER_STATUS
 from dataset.problems import SAMSPProblem
+import time
 
 class SAMSPSAT_CPM2_Solver:
     def __init__(self, problem: SAMSPProblem, LB=None, UB=None):
+        self.optimization = "sat"
         self.__solver = SATSolver()
         self.__problem = problem
-        self.__LB = LB if LB is not None and LB > problem.LB else problem.LB
+        self.__LB = max(problem.LB, problem.ES[problem.sink_id], LB if LB is not None else problem.LB)
         self.__UB = UB if UB is not None and UB < problem.UB else problem.UB
+        self.__encoding_seconds = None
+        self.__optimization_seconds = None
+        self.__optimization_started = None
+        self.objective_cost = None
 
         self.__preprocessing()
 
@@ -14,13 +20,43 @@ class SAMSPSAT_CPM2_Solver:
         self.__solver.add_clause(clause)
 
     def encode(self):
+        started = time.monotonic()
         self.__consistency_clause()
         self.__start_clauses()
         self.__precedence_constraints()
         self.__renewable_resources_constraints()
         self.__cummulative_resources_constraints()
+        sink = self.__problem.sink_id
+        if self.__LB > self.__UB:
+            self.add_clause([])
+        else:
+            self.add_clause([self.L[sink, self.__UB]])
+            if self.__LB > self.__problem.ES[sink]:
+                self.add_clause([-self.L[sink, self.__LB - 1]])
+        self.__encoding_seconds = time.monotonic() - started
 
-    def solve(self):
+    def get_hard_clauses(self):
+        return self.__solver.get_clauses()
+
+    def get_soft_clauses(self):
+        return []
+
+    def solve(self, time_limit=None):
+        if time_limit is not None and time_limit <= 0:
+            return SOLVER_STATUS.UNKNOWN
+        started = time.monotonic()
+        self.__optimization_started = started
+        deadline = None if time_limit is None else started + time_limit
+        try:
+            status = self.__solve_sat(deadline)
+            if status == SOLVER_STATUS.OPTIMAL:
+                self.objective_cost = self.get_makespan() - self.__LB
+            return status
+        finally:
+            self.__optimization_seconds = time.monotonic() - started
+            self.__optimization_started = None
+
+    def __solve_sat(self, deadline):
         low = self.__LB
         high = self.__UB
         best = None
@@ -33,7 +69,10 @@ class SAMSPSAT_CPM2_Solver:
                 self.L[self.__problem.sink_id, makespan]
             )
 
-            result = self.__solver.solve()
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                return SOLVER_STATUS.UNKNOWN
+            result = self.__solver.solve(time_limit=remaining)
             if result is None:
                 print("Solver returned UNKNOWN")
                 return SOLVER_STATUS.UNKNOWN
@@ -50,7 +89,15 @@ class SAMSPSAT_CPM2_Solver:
         return SOLVER_STATUS.OPTIMAL
 
     def get_statistics(self):
-        return self.__solver.get_statistics()
+        result = self.__solver.get_statistics()
+        result.update(optimization=self.optimization, hard_clauses=result["clauses"],
+                      soft_clauses=0,
+                      objective_cost=self.objective_cost, objective_lower_bound=self.__LB,
+                      objective_upper_bound=self.__UB, encoding_seconds=self.__encoding_seconds,
+                      optimization_seconds=(time.monotonic() - self.__optimization_started
+                                            if self.__optimization_started is not None
+                                            else self.__optimization_seconds))
+        return result
 
     def get_last_feasible_model(self):
         return self.__solver.get_last_feasible_model()
