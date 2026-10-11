@@ -65,6 +65,15 @@ class SAMSPProblem:
                 for j in self.precedence_graph.successors(i)
             ]) for i in self.activity_ids
         ))
+        self.set_search_horizon(self.UB)
+
+    def set_search_horizon(self, upper_bound):
+        """Recompute finite windows and storage constants for a search horizon."""
+        if not isinstance(upper_bound, int) or isinstance(upper_bound, bool):
+            raise ValueError("Search horizon must be an integer")
+        if upper_bound < max(0, self.LB):
+            raise ValueError("Search horizon must be at least the temporal lower bound")
+        self.UB = upper_bound
         # Some JSON activities lack a path to a dummy. Assign finite horizon
         # windows without inserting precedence edges into the supplied graph.
         self.ES = [
