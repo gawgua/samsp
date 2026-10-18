@@ -2,6 +2,7 @@ from solver.solver import SOLVER_STATUS
 from dataset.problems import SAMSPProblem
 from threading import Event, Timer
 import time
+import numpy as np
 
 from pysat.examples.rc2 import RC2
 from pysat.formula import WCNF
@@ -15,8 +16,20 @@ class SAMSPMaxSAT_CPM2_Solver:
         self.__formula = WCNF()
         self.__model_built = False
         self.__problem = problem
-        self.__LB = max(problem.LB, problem.ES[problem.sink_id], LB if LB is not None else problem.LB)
-        self.__UB = UB if UB is not None and UB < problem.UB else problem.UB
+        self.__duration_values = tuple(map(int, problem.durations))
+        self.__renewable_requests = np.asarray(problem.renewable_requests, dtype=np.int64)
+        self.__cumulative_requests = np.asarray(problem.cumulative_requests, dtype=np.int64)
+        self.__ES, self.__LS, self.__EC, self.__LC = (
+            np.asarray(getattr(problem, name), dtype=np.int64) for name in ('ES', 'LS', 'EC', 'LC'))
+        if hasattr(problem, 'precedence_arcs'):
+            self.__precedence_arcs = problem.precedence_arcs
+        else:
+            # Preserve compatibility with callers supplying the graph parser.
+            self.__precedence_arcs = np.asarray(
+                [(a, b, data.get('weight', 0)) for a, b, data in problem.precedence_graph.edges(data=True)],
+                dtype=np.int64).reshape((-1, 3))
+        self.__LB = int(max(problem.LB, problem.ES[problem.sink_id], LB if LB is not None else problem.LB))
+        self.__UB = int(UB if UB is not None and UB < problem.UB else problem.UB)
         self.__model = None
         self.__maxsat_statistics = {}
         self.__rc2 = None
@@ -34,17 +47,6 @@ class SAMSPMaxSAT_CPM2_Solver:
 
     def add_clause(self, clause):
         self.__formula.append(clause)
-
-    def get_L(self, i, t):
-        """Return the signed order literal, clamping thresholds to the window.
-
-        L[i, LS[i]] is forced true by the start clauses. Its negation therefore
-        represents the false order predicate at thresholds before ES[i].
-        """
-        latest = self.__problem.LS[i]
-        if t < self.__problem.ES[i]:
-            return -self.L[i, latest]
-        return self.L[i, min(t, latest)]
 
     def encode(self):
         """Compatibility entry point for the benchmark runner."""
@@ -64,11 +66,11 @@ class SAMSPMaxSAT_CPM2_Solver:
         if self.__LB > self.__UB:
             self.add_clause([])
         else:
-            self.add_clause([self.get_L(sink, self.__UB)])
+            self.add_clause([self.L[sink, self.__UB]])
             if self.__LB > self.__problem.ES[sink]:
-                self.add_clause([-self.get_L(sink, self.__LB - 1)])
+                self.add_clause([-self.L[sink, self.__LB - 1]])
         for t in range(self.__LB, self.__UB):
-            self.__formula.append([self.get_L(sink, t)], weight=1)
+            self.__formula.append([self.L[sink, t]], weight=1)
         self.__encoding_seconds = time.monotonic() - started
         self.__model_built = True
 
@@ -172,8 +174,8 @@ class SAMSPMaxSAT_CPM2_Solver:
         if model is None:
             return None
         sink = self.__problem.sink_id
-        for t in range(self.__problem.ES[sink], self.__problem.LS[sink] + 1):
-            if model[self.get_L(sink, t) - 1] > 0:
+        for t in range(self.__problem.ES[sink], self.__problem.UB + 1):
+            if model[self.L[sink, t] - 1] > 0:
                 return t
         return None
 
@@ -185,49 +187,48 @@ class SAMSPMaxSAT_CPM2_Solver:
                 self.u[i, t] = self.create_new_variable()
         self.L = {}  # L(ai,t) activity i is started before or at time t
         for i in range(self.__problem.number_of_activities):
-            for t in range(self.__problem.ES[i], self.__problem.LS[i] + 1):
+            for t in range(self.__problem.ES[i], self.__problem.UB + 1):
                 self.L[i, t] = self.create_new_variable()
         self.register = {}  # R(Ai, s, t) activity i is started in time range [s, t]
 
     def __consistency_clause(self):
         for i in range(self.__problem.number_of_activities):
-            for t in range(self.__problem.ES[i], self.__problem.LS[i]):
-                self.add_clause([-self.get_L(i, t), self.get_L(i, t + 1)])
+            for t in range(self.__problem.ES[i], self.__problem.UB):
+                self.add_clause([-self.L[i, t], self.L[i, t + 1]])
 
         for i in range(self.__problem.number_of_activities):
-            for t in range(self.__problem.ES[i], self.__problem.LC[i]):
-                self.add_clause([-self.u[i, t], self.get_L(i, t)])
-                previous_time = t - self.__problem.durations[i]
-                if previous_time < self.__problem.ES[i]:
+            earliest = int(self.__problem.ES[i])
+            duration = self.__duration_values[i]
+            for t in range(earliest, self.__problem.LC[i]):
+                self.add_clause([-self.u[i, t], self.L[i, t]])
+                previous_time = t - duration
+                if previous_time < earliest:
                     # Before ES the activity has not started, so L is false.
-                    self.add_clause([self.u[i, t], -self.get_L(i, t)])
+                    self.add_clause([self.u[i, t], -self.L[i, t]])
                 else:
-                    self.add_clause([-self.u[i, t], -self.get_L(i, previous_time)])
-                    self.add_clause([self.u[i, t], -self.get_L(i, t), self.get_L(i, previous_time)])
+                    self.add_clause([-self.u[i, t], -self.L[i, previous_time]])
+                    self.add_clause([self.u[i, t], -self.L[i, t], self.L[i, previous_time]])
                   
     def __start_clauses(self):
         for i in range(self.__problem.number_of_activities):
-            self.add_clause([self.get_L(i, self.__problem.LS[i])])
+            self.add_clause([self.L[i, self.__problem.LS[i]]])
 
     def __precedence_constraints(self):
-        for predecessor, successor, data in self.__problem.precedence_graph.edges(data=True):
-            weight = data.get("weight", 0)
+        for arc in self.__precedence_arcs:
+            predecessor, successor, weight = map(int, arc)
+            predecessor_times = range(int(self.__problem.ES[predecessor]), int(self.__problem.LS[predecessor]) + 1)
             for t in range(self.__problem.ES[successor], self.__problem.LS[successor] + 1):
-                if t - weight in range(self.__problem.ES[predecessor], self.__problem.LS[predecessor] + 1):
+                if t - weight in predecessor_times:
                     self.add_clause(
-                        [-self.get_L(successor, t), self.get_L(predecessor, t - weight)]
+                        [-self.L[successor, t], self.L[predecessor, t - weight]]
                     )
 
     def __renewable_resources_constraints(self):
         for r in range(self.__problem.number_of_renewable_resources):
             for t in range(self.__UB):
-                activities_using_r_at_t = []
-                for i in range(self.__problem.number_of_activities):
-                    if (
-                        self.__problem.renewable_requests[i][r] > 0
-                        and self.__problem.ES[i] <= t < self.__problem.LC[i]
-                    ):
-                        activities_using_r_at_t.append(self.u[i, t])
+                active = np.flatnonzero((self.__renewable_requests[:, r] > 0)
+                                        & (self.__ES <= t) & (t < self.__LC))
+                activities_using_r_at_t = [self.u[int(i), t] for i in active]
 
                 if len(activities_using_r_at_t) > 1:
                     # AMO for activities using resource r at time t
@@ -254,22 +255,23 @@ class SAMSPMaxSAT_CPM2_Solver:
             for t in range(self.__UB + 1):
                 lits = []
                 weights = []
-                limit = self.__problem.cumulative_capacities[r] - self.__problem.PS[r, t]
+                limit = int(self.__problem.cumulative_capacities[r] - self.__problem.PS[r, t])
 
-                for i in range(self.__problem.number_of_activities):
-                    c = self.__problem.cumulative_requests[i][r]
+                deltas = self.__cumulative_requests[:, r]
+                active = np.flatnonzero(((deltas > 0) & (self.__ES <= t) & (t < self.__LS))
+                                        | ((deltas < 0) & (self.__EC <= t) & (t < self.__LC)))
+                for item in active:
+                    i = int(item)
+                    c = int(deltas[i])
                     if c > 0:
-                        if self.__problem.ES[i] <= t < self.__problem.LS[i]:
-                            lits.append(self.get_L(i, t))
-                            weights.append(c)
-                    elif c < 0:
-                        if self.__problem.EC[i] <= t < self.__problem.LC[i]:
-                            w = -c
-                            t_finish = t - self.__problem.durations[i]
-
-                            lits.append(-self.get_L(i, t_finish))
-                            weights.append(w)
-                            limit += w
+                        lits.append(self.L[i, t])
+                        weights.append(c)
+                    else:
+                        w = -c
+                        t_finish = t - self.__duration_values[i]
+                        lits.append(-self.L[i, t_finish])
+                        weights.append(w)
+                        limit += w
 
                 if limit < 0:
                     raise ValueError(
