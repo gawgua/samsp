@@ -7,11 +7,21 @@ import numpy as np
 from pysat.examples.rc2 import RC2
 from pysat.formula import WCNF
 from pysat.pb import PBEnc, EncType
+from solver.renewable_res_uni import UnifiedRenewableEncoder, EncodingLimitError
 
 class SAMSPMaxSAT_CPM2_Solver:
     """CPM2 hard encoding with a sink-only weighted MaxSAT objective."""
 
-    def __init__(self, problem: SAMSPProblem, LB=None, UB=None):
+    def __init__(self, problem: SAMSPProblem, LB=None, UB=None, renewable_encoding="amo"):
+        if renewable_encoding not in {"amo", "res_uni"}:
+            raise ValueError("renewable_encoding must be amo or res_uni")
+        self.renewable_encoding = renewable_encoding
+        self.__renewable_encoder = None
+        self.__renewable_statistics = {}
+        self.__build_attempted = False
+        self.__encoding_deadline = None
+        self.__encoding_started = None
+        self.__phase_ranges = {}
         self.optimization = "maxsat"
         self.__formula = WCNF()
         self.__model_built = False
@@ -48,20 +58,42 @@ class SAMSPMaxSAT_CPM2_Solver:
     def add_clause(self, clause):
         self.__formula.append(clause)
 
-    def encode(self):
+    def encode(self, deadline=None):
         """Compatibility entry point for the benchmark runner."""
-        self.build_model()
+        self.build_model(deadline=deadline)
 
-    def build_model(self):
+    def build_model(self, deadline=None):
         """Construct all hard clauses and the weighted soft objective once."""
         if self.__model_built:
             return
+        if self.__build_attempted:
+            raise RuntimeError("Incomplete model cannot be rebuilt; create a fresh solver")
+        self.__build_attempted = True
+        self.__encoding_deadline = deadline
         started = time.monotonic()
-        self.__consistency_clause()
-        self.__start_clauses()
-        self.__precedence_constraints()
-        self.__renewable_resources_constraints()
-        self.__cummulative_resources_constraints()
+        self.__encoding_started = started
+        try:
+            self.__build_hard_model()
+            self.__build_objective()
+            self.__model_built = True
+        finally:
+            self.__encoding_seconds = time.monotonic() - started
+            self.__encoding_started = None
+
+    def __build_hard_model(self):
+        phases = (("timing", (self.__consistency_clause, self.__start_clauses,
+                               self.__precedence_constraints)),
+                  ("renewable", (self.__renewable_resources_constraints,)),
+                  ("storage", (self.__cummulative_resources_constraints,)))
+        for name, methods in phases:
+            if self.__encoding_deadline is not None and time.monotonic() >= self.__encoding_deadline:
+                raise EncodingLimitError("Model construction wall deadline exhausted")
+            first = len(self.__formula.hard)
+            for method in methods:
+                method()
+            self.__phase_ranges[name] = (first, len(self.__formula.hard))
+
+    def __build_objective(self):
         sink = self.__problem.sink_id
         if self.__LB > self.__UB:
             self.add_clause([])
@@ -71,8 +103,10 @@ class SAMSPMaxSAT_CPM2_Solver:
                 self.add_clause([-self.L[sink, self.__LB - 1]])
         for t in range(self.__LB, self.__UB):
             self.__formula.append([self.L[sink, t]], weight=1)
-        self.__encoding_seconds = time.monotonic() - started
-        self.__model_built = True
+
+    def get_hard_clause_phases(self):
+        """Clause boundaries for timing/storage parity checks; no clause copies."""
+        return dict(self.__phase_ranges)
 
     def get_hard_clauses(self):
         """Return canonical clauses for comparisons, retaining duplicates."""
@@ -83,6 +117,8 @@ class SAMSPMaxSAT_CPM2_Solver:
         return self.__formula.soft
 
     def solve(self, time_limit=None):
+        if self.__build_attempted and not self.__model_built:
+            return SOLVER_STATUS.UNKNOWN
         if time_limit is not None and time_limit <= 0:
             return SOLVER_STATUS.UNKNOWN
         started = time.monotonic()
@@ -160,10 +196,15 @@ class SAMSPMaxSAT_CPM2_Solver:
         result.update(optimization=self.optimization, hard_clauses=result["clauses"],
                       soft_clauses=len(self.__formula.soft),
                       objective_cost=self.objective_cost, objective_lower_bound=self.__LB,
-                      objective_upper_bound=self.__UB, encoding_seconds=self.__encoding_seconds,
+                      objective_upper_bound=self.__UB,
+                      encoding_seconds=(time.monotonic() - self.__encoding_started
+                                        if self.__encoding_started is not None else self.__encoding_seconds),
                       optimization_seconds=(time.monotonic() - self.__optimization_started
                                             if self.__optimization_started is not None
                                             else self.__optimization_seconds))
+        result.update(renewable_encoding=self.renewable_encoding, model_complete=self.__model_built,
+                      renewable=(self.__renewable_encoder.statistics() if self.__renewable_encoder is not None
+                                 else dict(self.__renewable_statistics)))
         return result
 
     def get_last_feasible_model(self):
@@ -224,6 +265,10 @@ class SAMSPMaxSAT_CPM2_Solver:
                     )
 
     def __renewable_resources_constraints(self):
+        if self.renewable_encoding == "res_uni":
+            self.__res_uni_constraints()
+            return
+        started, clauses, variables = time.monotonic(), len(self.__formula.hard), self.__formula.nv
         for r in range(self.__problem.number_of_renewable_resources):
             for t in range(self.__UB):
                 active = np.flatnonzero((self.__renewable_requests[:, r] > 0)
@@ -248,6 +293,32 @@ class SAMSPMaxSAT_CPM2_Solver:
                             -activities_using_r_at_t[-1],
                         ]
                     )
+        self.__renewable_statistics = dict(
+            rows=self.__UB * self.__problem.number_of_renewable_resources, complete=True,
+            clauses=len(self.__formula.hard) - clauses, auxiliary_variables=self.__formula.nv - variables,
+            seconds=time.monotonic() - started, stages=[])
+
+    def __res_uni_constraints(self):
+        encoder = UnifiedRenewableEncoder(self.__formula, deadline=self.__encoding_deadline)
+        self.__renewable_encoder = encoder
+        closure = self.__problem.temporal_closure
+        durations = np.asarray(self.__duration_values)
+        # A generalized lag implies non-overlap only if it spans the full duration.
+        nonoverlap = (closure >= durations[:, None])
+        nonoverlap |= nonoverlap.T.copy()
+        np.fill_diagonal(nonoverlap, False)
+        for t in range(self.__UB):
+            for r in range(self.__problem.number_of_renewable_resources):
+                encoder.begin_row()
+                active = np.flatnonzero((self.__renewable_requests[:, r] > 0)
+                                        & (durations > 0) & (self.__ES <= t) & (t < self.__LC))
+                activities = {self.u[int(i), t]: int(i) for i in active}
+                coefficients = {literal: int(self.__renewable_requests[i, r])
+                                for literal, i in activities.items()}
+                def exclusive(a, b):
+                    return a in activities and b in activities and bool(nonoverlap[activities[a], activities[b]])
+                encoder.add_row(coefficients, int(self.__problem.renewable_capacities[r]), exclusive)
+        encoder.finish(self.__UB * self.__problem.number_of_renewable_resources)
 
     def __cummulative_resources_constraints(self):
         # usage at t of r <= capacity of r - ps of r
