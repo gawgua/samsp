@@ -1,0 +1,10 @@
+{
+  "resume_reran_zero_workers": true,
+  "unchanged_artifacts": 325,
+  "runner_worker_ast_identical": true,
+  "current_source_differences": [
+    "run_dataset.py",
+    "tests/test_maxsat_optimized.py"
+  ],
+  "reason": "General CLI manifest/resume handling and additional regression tests only; measured worker and solver sources unchanged"
+}

@@ -1,0 +1,212 @@
+{
+  "instances": [
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{15}.json",
+      "name": "{15}.json",
+      "activities": 27
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{35}.json",
+      "name": "{35}.json",
+      "activities": 37
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{45}.json",
+      "name": "{45}.json",
+      "activities": 37
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{110}.json",
+      "name": "{110}.json",
+      "activities": 52
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{15-35}.json",
+      "name": "{15-35}.json",
+      "activities": 62
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{15-45}.json",
+      "name": "{15-45}.json",
+      "activities": 62
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{25}.json",
+      "name": "{25}.json",
+      "activities": 62
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{310}.json",
+      "name": "{310}.json",
+      "activities": 72
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{35-45}.json",
+      "name": "{35-45}.json",
+      "activities": 72
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{410}.json",
+      "name": "{410}.json",
+      "activities": 72
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{15-25}.json",
+      "name": "{15-25}.json",
+      "activities": 87
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{25-35}.json",
+      "name": "{25-35}.json",
+      "activities": 97
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{25-45}.json",
+      "name": "{25-45}.json",
+      "activities": 97
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{120}.json",
+      "name": "{120}.json",
+      "activities": 102
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{110-310}.json",
+      "name": "{110-310}.json",
+      "activities": 122
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{110-410}.json",
+      "name": "{110-410}.json",
+      "activities": 122
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{210}.json",
+      "name": "{210}.json",
+      "activities": 122
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{310-410}.json",
+      "name": "{310-410}.json",
+      "activities": 142
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{320}.json",
+      "name": "{320}.json",
+      "activities": 142
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{420}.json",
+      "name": "{420}.json",
+      "activities": 142
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/t1x10_t2x10_s0.json",
+      "name": "t1x10_t2x10_s0.json",
+      "activities": 172
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/t1x10_t2x10_s1.json",
+      "name": "t1x10_t2x10_s1.json",
+      "activities": 172
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/t1x10_t2x10_s2.json",
+      "name": "t1x10_t2x10_s2.json",
+      "activities": 172
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{110-210}.json",
+      "name": "{110-210}.json",
+      "activities": 172
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{210-310}.json",
+      "name": "{210-310}.json",
+      "activities": 192
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{210-410}.json",
+      "name": "{210-410}.json",
+      "activities": 192
+    },
+    {
+      "path": "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{220}.json",
+      "name": "{220}.json",
+      "activities": 242
+    }
+  ],
+  "repeats": 3,
+  "time_limit": 120,
+  "memory_limit_mb": 4096,
+  "cp_workers": 1,
+  "cp_executable": "/opt/ibm/ILOG/CPLEX_Studio222/cpoptimizer/bin/x86-64_linux/cpoptimizer",
+  "cp_sha256": "8d300e995b34ff69359442aa41dd80db2e43dd86a8a8631c9d6b94e1135afcc8",
+  "python_executable": "/home/nguen/pysat/bin/python",
+  "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+  "platform": "Linux-6.18.40.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "load_at_start": [
+    0.673828125,
+    1.16552734375,
+    0.86669921875
+  ],
+  "poll_interval": 0.02,
+  "source_sha256": {
+    "run_dataset.py": "5b497cbb74d37086781dc72d892d9dbab09bba949c5ce388a2e73dc9113f4dfa",
+    "run_maxsat_goal_comparison.py": "8386f6f943067cb9e5152f7ffe4119d981631b83d06fb8443056942dbd12048b",
+    "solver/resource_bounds.py": "9ee770b43fced0c43a8f441bfa03bb32af6f038f13da7230053f77512381d3a2",
+    "solver/samsp_cp_solver.py": "9aee8133acbb3de7c753808d79309805d4323641ebd57766bba817a9e52e1712",
+    "solver/samsp_gurobi_solver.py": "992fd0160d4433f542ce747a40bc6eeb7ee57cc562dad758cb66ab92a39bf6a2",
+    "solver/samsp_maxsat_cpm2_solver.py": "0fd6271f046b2d6617ef822691448ec189f3d6184f013bd5e095a8cfa930493d",
+    "solver/samsp_maxsat_optimized_solver.py": "edb957bc77ca31d4facada5081637464e1ea5c97b269eb5c16e3ac64ff84bcd3",
+    "solver/samsp_milp_solver.py": "206d77bd40b7265e3d6b9f3f699632187279bd6575d1449d0df9e5c6ee40bc8d",
+    "solver/savilerow_storage.py": "b7aa21877826d6a9f2300250c77ba87b78a4f834b42a09a9ee09cdcbc70d0a4a",
+    "solver/schedule_upper_bound.py": "253675f25b70d8af5d181142dd7803c2766b3ecd86e8c9b2cab51fe579effa56",
+    "solver/solver.py": "989af68184721cdf7d574041bfb1e7f1e84161d92228bead0c967e3944fe23f0",
+    "solver/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dataset/array_problem.py": "df2844d1e5e9e45b5676d03de15ead9dc748c9b8e2855021db498bece36adef1",
+    "dataset/problems.py": "6859fb81c008b162734342ee5a19fc6298491f7ce52f44ecba355071126baf1e",
+    "dataset/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tests/test_maxsat_optimized.py": "e28b0eb12f780d4506bc14b3b4a1b91cfa6cf62ac09050bbe9a93b77df20cfdb"
+  },
+  "input_sha256": {
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/t1x10_t2x10_s0.json": "4247cf7e087dad9485509a51e490bbe67a046a9d53bd0c459204625c809c00eb",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/t1x10_t2x10_s1.json": "83bd96786cae3f79eb0e5d8c333c2e7e753ce6c7dbeaf15b46be203c63590296",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/t1x10_t2x10_s2.json": "ba5b1c5497ce6e2a02a4ad326f2eda58fdc048e4a7ff9e245f33f7f4b6f1ac38",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{110-210}.json": "4247cf7e087dad9485509a51e490bbe67a046a9d53bd0c459204625c809c00eb",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{110-310}.json": "a48108b97fdaa06c7075aebf181ee53257b23d1654c9e55f1966ee76c867792e",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{110-410}.json": "2ed31714b7843b051625e87aaabe9ae12ed64c6b736d1b643ca874f635589f96",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{110}.json": "1e1c6ba753cc4ef452d10e24f4fad676d4c3f5b9427cbecd5a1500e572e97bc3",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{120}.json": "36729568c26f78f352f2f00bdc97eecded8e894508d8013d202a0a866a11912a",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{15-25}.json": "1788cbfc6a811ba2acd77d2550981ca431eaaad7a98993e5750428f32f1ce0eb",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{15-35}.json": "5936910d13f4bcd0dc74ef01faa3953f3f926966ea690bf365b9f017c4145740",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{15-45}.json": "6ab28d98d06ae7e9882e10d3b83a6da44a4909353be26674a7a104bf8ca15cd5",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{15}.json": "756674453b837f3c389d23c3a943b900ab29684d5ed9b55959fad2258cc8b0bf",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{210-310}.json": "c4376f958045846804e4ccb5297837f8b5f374146f187e73d7c6defbe957c1b8",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{210-410}.json": "036ad2ad961a575bbcc2c7a95c9688d6dc9ba44f58f9994e67753eee57a58391",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{210}.json": "0d770b35086f4facd702a61465e2f59e1be8b9e7157f577a26216098eec780e7",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{220}.json": "f689c480c335ec6075b9f4fed7bed27eb0042734cf229840fcde8e3daf309cc2",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{25-35}.json": "0d365edba7888879e985fffa12ad5ed7101d147e787ef1cdaac76c512cdfc172",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{25-45}.json": "46b122ea9f4685b7fd64f51670c55ccf6c25eb31985ddc69dafab66d95b10e78",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{25}.json": "3f37eb48e11d7c5b6858cfbc709662ccc6c4ac99749eb0252de48691f3d69263",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{310-410}.json": "f8c1ddf879bfa285a30eb609dc53011bb97959401d9e74985c6ecd6557165d99",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{310}.json": "e40455d277124e1103fed588bca26f235652273de9eecaaef4c5f808e55d4f06",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{320}.json": "78104c293411d82a58fc56d3e090cf1d6acd599f6fc8df733e13b0016d2b638c",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{35-45}.json": "bec8d4bb944c945f86c51ee36ac2a63e9e11e6bd432259f27f4920f08587a355",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{35}.json": "15288736c8a3b67f07bdd632ce2ddd5f4ae03ebaed1175aef05ab309981b8d81",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{410}.json": "80fb0475eacaec2e2806e134a828be6ff64d0dea9f4f3e89e85b3d70b5e5439d",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{420}.json": "8ed925dcb459c51240c473998fc4d09bea13cba82f26ab231d75e22ed555e4c4",
+    "/mnt/c/users/khoin/downloads/sat/samsp/src/dataset/data/set_i/{45}.json": "ac7c5988f66342c5d3ebc4f467c35132a09914741c586b55d1972087a058d55b"
+  },
+  "packages": {
+    "python-sat": "1.9.dev2",
+    "networkx": "3.6.1",
+    "numpy": "2.5.2",
+    "docplex": "2.32.264"
+  },
+  "engine": "g4",
+  "slack": 0,
+  "cardinality": "seqcounter",
+  "adapt": false,
+  "historical_answers_consumed": false
+}
