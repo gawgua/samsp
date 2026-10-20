@@ -1,9 +1,48 @@
 from solver.solver import SATSolver, SOLVER_STATUS
 from dataset.problems import SAMSPProblem
 import time
+import numpy as np
+from solver.renewable_res_uni import UnifiedRenewableEncoder, EncodingLimitError
+
+
+class _HardClauses:
+    def __init__(self, solver):
+        self.solver = solver
+
+    def __len__(self):
+        return self.solver.get_clause_count()
+
+    def extend(self, clauses):
+        for clause in clauses:
+            self.solver.add_clause(clause)
+
+
+class _SATFormula:
+    """Expose the existing SAT allocator and clause sink to staged conversion."""
+    soft = ()
+
+    def __init__(self, solver):
+        self.solver = solver
+        self.hard = _HardClauses(solver)
+
+    @property
+    def nv(self):
+        return self.solver.get_variable_count()
+
+    @nv.setter
+    def nv(self, value):
+        self.solver.reserve_variables(value)
 
 class SAMSPSAT_CPM2_Solver:
-    def __init__(self, problem: SAMSPProblem, LB=None, UB=None):
+    def __init__(self, problem: SAMSPProblem, LB=None, UB=None, renewable_encoding="amo"):
+        if renewable_encoding not in {"amo", "res_uni"}:
+            raise ValueError("renewable_encoding must be amo or res_uni")
+        self.renewable_encoding = renewable_encoding
+        self.__renewable_encoder = None
+        self.__renewable_statistics = {}
+        self.__encoded = False
+        self.__encoding_started = None
+        self.__deadline = None
         self.optimization = "sat"
         self.__solver = SATSolver()
         self.__problem = problem
@@ -19,8 +58,12 @@ class SAMSPSAT_CPM2_Solver:
     def add_clause(self, clause):
         self.__solver.add_clause(clause)
 
-    def encode(self):
+    def encode(self, deadline=None):
+        if self.__encoded:
+            return
         started = time.monotonic()
+        self.__encoding_started = started
+        self.__deadline = deadline
         self.__consistency_clause()
         self.__start_clauses()
         self.__precedence_constraints()
@@ -34,6 +77,8 @@ class SAMSPSAT_CPM2_Solver:
             if self.__LB > self.__problem.ES[sink]:
                 self.add_clause([-self.L[sink, self.__LB - 1]])
         self.__encoding_seconds = time.monotonic() - started
+        self.__encoding_started = None
+        self.__encoded = True
 
     def get_hard_clauses(self):
         return self.__solver.get_clauses()
@@ -42,6 +87,8 @@ class SAMSPSAT_CPM2_Solver:
         return []
 
     def solve(self, time_limit=None):
+        if not self.__encoded:
+            return SOLVER_STATUS.UNKNOWN
         if time_limit is not None and time_limit <= 0:
             return SOLVER_STATUS.UNKNOWN
         started = time.monotonic()
@@ -93,10 +140,15 @@ class SAMSPSAT_CPM2_Solver:
         result.update(optimization=self.optimization, hard_clauses=result["clauses"],
                       soft_clauses=0,
                       objective_cost=self.objective_cost, objective_lower_bound=self.__LB,
-                      objective_upper_bound=self.__UB, encoding_seconds=self.__encoding_seconds,
+                      objective_upper_bound=self.__UB,
+                      encoding_seconds=(time.monotonic() - self.__encoding_started
+                                        if self.__encoding_started is not None else self.__encoding_seconds),
                       optimization_seconds=(time.monotonic() - self.__optimization_started
                                             if self.__optimization_started is not None
                                             else self.__optimization_seconds))
+        result.update(renewable_encoding=self.renewable_encoding, model_complete=self.__encoded,
+                      renewable=(self.__renewable_encoder.statistics() if self.__renewable_encoder is not None
+                                 else dict(self.__renewable_statistics)))
         return result
 
     def get_last_feasible_model(self):
@@ -154,6 +206,11 @@ class SAMSPSAT_CPM2_Solver:
                     )
 
     def __renewable_resources_constraints(self):
+        if self.renewable_encoding == "res_uni":
+            self.__res_uni_constraints()
+            return
+        started = time.monotonic()
+        clauses, variables = self.__solver.get_clause_count(), self.__solver.get_variable_count()
         for r in range(self.__problem.number_of_renewable_resources):
             for t in range(self.__UB):
                 activities_using_r_at_t = []
@@ -182,6 +239,31 @@ class SAMSPSAT_CPM2_Solver:
                             -activities_using_r_at_t[-1],
                         ]
                     )
+        self.__renewable_statistics = dict(rows=int(self.__UB) * self.__problem.number_of_renewable_resources,
+            complete=True, clauses=self.__solver.get_clause_count() - clauses,
+            auxiliary_variables=self.__solver.get_variable_count() - variables,
+            seconds=time.monotonic() - started, stages=[])
+
+    def __res_uni_constraints(self):
+        problem = self.__problem
+        encoder = UnifiedRenewableEncoder(_SATFormula(self.__solver), deadline=self.__deadline)
+        self.__renewable_encoder = encoder
+        durations = np.asarray(problem.durations)
+        requests = np.asarray(problem.renewable_requests)
+        nonoverlap = problem.temporal_closure >= durations[:, None]
+        nonoverlap |= nonoverlap.T.copy()
+        np.fill_diagonal(nonoverlap, False)
+        for t in range(self.__UB):
+            for r in range(problem.number_of_renewable_resources):
+                encoder.begin_row()
+                active = np.flatnonzero((requests[:, r] > 0) & (durations > 0)
+                                       & (problem.ES <= t) & (t < problem.LC))
+                activities = {self.u[int(i), t]: int(i) for i in active}
+                coefficients = {literal: int(requests[i, r]) for literal, i in activities.items()}
+                def exclusive(a, b):
+                    return a in activities and b in activities and bool(nonoverlap[activities[a], activities[b]])
+                encoder.add_row(coefficients, int(problem.renewable_capacities[r]), exclusive)
+        encoder.finish(int(self.__UB) * problem.number_of_renewable_resources)
 
     def __cummulative_resources_constraints(self):
         # usage at t of r <= capacity of r - ps of r

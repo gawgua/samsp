@@ -14,6 +14,15 @@ class SOLVER_STATUS(Enum):
 
 
 class SATSolver:
+    def get_variable_count(self):
+        return self.__number_of_variables
+
+    def reserve_variables(self, top_id):
+        self.__number_of_variables = max(self.__number_of_variables, top_id)
+
+    def get_clause_count(self):
+        return len(self.__temp_clauses)
+
     def __init__(self):
         self.__number_of_variables = 0
         self.__solver = None

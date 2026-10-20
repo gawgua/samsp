@@ -31,14 +31,16 @@ import platform
 ROOT = Path(__file__).resolve().parent
 BACKENDS = {
     "sat_cpm2": ("solver.samsp_sat_cpm2_solver", "SAMSPSAT_CPM2_Solver"),
+    "sat_cpm2_res_uni": ("solver.samsp_sat_cpm2_solver", "SAMSPSAT_CPM2_Solver"),
     "maxsat_cpm2": ("solver.samsp_maxsat_cpm2_solver", "SAMSPMaxSAT_CPM2_Solver"),
+    "maxsat_cpm2_res_uni": ("solver.samsp_maxsat_cpm2_solver", "SAMSPMaxSAT_CPM2_Solver"),
     "cp": ("solver.samsp_cp_solver", "SAMSPCPSolver"),
     "milp": ("solver.samsp_milp_solver", "SAMSPMILPSolver"),
     "gurobi": ("solver.samsp_gurobi_solver", "SAMSPGurobiSolver"),
 }
 STUDIO_CP = Path("/opt/ibm/ILOG/CPLEX_Studio222/cpoptimizer/bin/x86-64_linux/cpoptimizer")
-CPM2_BACKENDS = {"sat_cpm2", "maxsat_cpm2"}
-MAXSAT_BACKENDS = {"maxsat_cpm2"}
+CPM2_BACKENDS = {"sat_cpm2", "sat_cpm2_res_uni", "maxsat_cpm2", "maxsat_cpm2_res_uni"}
+MAXSAT_BACKENDS = {"maxsat_cpm2", "maxsat_cpm2_res_uni"}
 SAT_BACKENDS = {"sat", *CPM2_BACKENDS}
 
 
@@ -221,7 +223,7 @@ def worker(args):
         state["stage"] = "preprocess"
         problem = SAMSPProblem.from_json(args.instance)
         objects["problem"] = problem
-        if args.worker == "maxsat_cpm2" and getattr(args, "maxsat_heuristic_ub", False):
+        if args.worker in MAXSAT_BACKENDS and getattr(args, "maxsat_heuristic_ub", False):
             from dataclasses import asdict
             from solver.schedule_upper_bound import find_upper_bound
             state["stage"] = "heuristic_ub"
@@ -238,19 +240,28 @@ def worker(args):
             state["heuristic_ub"]["search_horizon"] = problem.UB
             snapshot()
         upper_bound = getattr(args, "cpm2_upper_bound", None)
-        if upper_bound is None and args.worker == "maxsat_cpm2":
+        if upper_bound is None and args.worker in MAXSAT_BACKENDS:
             upper_bound = getattr(args, "maxsat_upper_bound", None)
-        if args.worker in {"sat_cpm2", "maxsat_cpm2"} and upper_bound is not None:
+        if args.worker in CPM2_BACKENDS and upper_bound is not None:
             state["original_UB"] = problem.UB
             problem.set_search_horizon(upper_bound)
             state["predefined_UB"] = upper_bound
         state["stage"] = "initialize"
-        solver = solver_class(problem)
+        if args.worker in CPM2_BACKENDS:
+            encoding = ("res_uni" if args.worker.endswith("_res_uni")
+                        else getattr(args, "renewable_encoding", "amo"))
+            state["renewable_encoding"] = encoding
+            solver = solver_class(problem, renewable_encoding=encoding)
+        else:
+            solver = solver_class(problem)
         objects["solver"] = solver
         state["stage"] = "encode" if args.worker in SAT_BACKENDS else "build_model"
         build_started = time.monotonic()
         if args.worker in SAT_BACKENDS:
-            solver.encode()
+            if args.worker in CPM2_BACKENDS:
+                solver.encode(deadline=deadline)
+            else:
+                solver.encode()
         else:
             solver.build_model()
         state["build_seconds"] = time.monotonic() - build_started
@@ -442,12 +453,15 @@ def run_one(args, instance, backend, folder):
     if args.cp_workers is not None:
         command.extend(["--cp-workers", str(args.cp_workers)])
     upper_bound = getattr(args, "maxsat_upper_bound", None)
-    if backend == "maxsat_cpm2" and upper_bound is not None:
+    if backend in MAXSAT_BACKENDS and upper_bound is not None:
         command.extend(["--maxsat-upper-bound", str(upper_bound)])
     shared_bound = getattr(args, "cpm2_upper_bound", None)
-    if backend in {"sat_cpm2", "maxsat_cpm2"} and shared_bound is not None:
+    if backend in CPM2_BACKENDS and shared_bound is not None:
         command.extend(["--cpm2-upper-bound", str(shared_bound)])
-    if backend == "maxsat_cpm2" and getattr(args, "maxsat_heuristic_ub", False):
+    if backend in CPM2_BACKENDS:
+        command.extend(["--renewable-encoding", "res_uni" if backend.endswith("_res_uni")
+                        else getattr(args, "renewable_encoding", "amo")])
+    if backend in MAXSAT_BACKENDS and getattr(args, "maxsat_heuristic_ub", False):
         command.extend(["--maxsat-heuristic-ub", "--heuristic-time-limit",
                         str(getattr(args, "heuristic_time_limit", 2.0))])
     started = time.monotonic()
@@ -546,16 +560,129 @@ def write_summary(folder, results):
 
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def parse_solver_selection(value):
+    """Resolve registered backend names and filename aliases without importing solvers."""
+    tokens = [token.strip() for token in value.split(",")]
+    if tokens == ["all"]:
+        return list(BACKENDS)
+    aliases = {name: name for name in BACKENDS}
+    for name, (module, _) in BACKENDS.items():
+        if name.endswith("_res_uni"):
+            continue
+        filename = module.rsplit(".", 1)[-1] + ".py"
+        aliases[filename] = name
+        aliases[filename.removeprefix("samsp_")] = name
+    selected = []
+    for token in tokens:
+        backend = aliases.get(Path(token).name) if token else None
+        if backend is None:
+            raise ValueError(f"unknown solver {token!r}; choose {', '.join(BACKENDS)}, or all")
+        if backend in selected:
+            raise ValueError(f"duplicate solver selection: {backend}")
+        selected.append(backend)
+    return selected
+
+
+def parse_sets(value):
+    selected = tuple(token.strip().upper() for token in value.split(","))
+    if not selected or any(token not in {"I", "II"} for token in selected):
+        raise argparse.ArgumentTypeError("set must be I, II, or I,II")
+    if len(set(selected)) != len(selected):
+        raise argparse.ArgumentTypeError("set list must not contain duplicates")
+    return selected
+
+
+def select_instances(dataset_dir, sets=None):
+    if sets is None:
+        return sorted(p for p in dataset_dir.rglob("*.json") if p.name != "test.json")
+    files = []
+    for label in sets:
+        directory = dataset_dir / ("set_" + label.lower())
+        selected = sorted(p for p in directory.rglob("*.json") if p.name != "test.json")
+        if not selected:
+            raise ValueError(f"no dataset JSON files found for Set {label}: {directory}")
+        files.extend(selected)
+    return files
+
+
+def comparison_markdown(dataset_dir, files, solvers, results):
+    """Compare recorded results without treating an incumbent as an optimality proof."""
+    indexed = {(row["instance"], row["solver"]): row for row in results}
+    groups = {}
+    for path in files:
+        relative = path.relative_to(dataset_dir)
+        label = {"set_i": "Set I", "set_ii": "Set II"}.get(relative.parts[0], "Instances")
+        groups.setdefault(label, []).append(path)
+    lines = ["Cells: status / makespan / wall seconds / valid.", ""]
+
+    def table(headers, rows):
+        lines.append("| " + " | ".join(headers) + " |")
+        lines.append("| " + " | ".join("---" for _ in headers) + " |")
+        lines.extend("| " + " | ".join(row) + " |" for row in rows)
+        lines.append("")
+
+    def cell(row):
+        if row is None:
+            return "PENDING / — / — / —"
+        valid = row.get("valid")
+        status = ("INVALID" if valid is False or row["status"] == "INVALID_SOLUTION"
+                  else row["status"])
+        if row.get("stop_reason") in {"time_limit", "memory_limit"}:
+            status += " (" + row["stop_reason"] + ")"
+        makespan = row.get("makespan")
+        wall = row.get("wall_seconds")
+        return " / ".join((status, str(makespan) if makespan is not None else "—",
+                           f"{wall:.3f}" if wall is not None else "—",
+                           "yes" if valid is True else "NO" if valid is False else "—"))
+
+    def instance_name(path):
+        relative = path.relative_to(dataset_dir)
+        if relative.parts[0] in {"set_i", "set_ii"}:
+            return str(Path(*relative.parts[1:]))
+        return str(relative)
+
+    for label, paths in groups.items():
+        lines.extend(("## " + label, ""))
+        table(["Instance", *solvers],
+              [[instance_name(path),
+                *(cell(indexed.get((str(path), solver))) for solver in solvers)] for path in paths])
+    lines.extend(("## Totals", ""))
+    totals = []
+    for solver in solvers:
+        rows = [row for row in results if row["solver"] == solver]
+        invalid = sum(row.get("valid") is False or row["status"] == "INVALID_SOLUTION" for row in rows)
+        errors = sum(row["status"] == "ERROR" and row.get("valid") is not False for row in rows)
+        optimal = sum(row["status"] == "OPTIMAL" and row.get("valid") is True for row in rows)
+        infeasible = sum(row["status"] in {"UNSATISFIABLE", "INFEASIBLE"}
+                         and row.get("valid") is not False for row in rows)
+        unresolved = len(rows) - invalid - errors - optimal - infeasible
+        totals.append([solver, str(optimal), str(infeasible), str(unresolved), str(errors), str(invalid),
+                       f"{sum(row.get('wall_seconds') or 0 for row in rows):.3f}"])
+    table(["Solver", "Validated optima", "Infeasible", "Unresolved", "Errors", "Invalid", "Wall seconds"], totals)
+    return "\n".join(lines)
+
+
+def main(argv=None):
+    arguments = sys.argv[1:] if argv is None else argv
+    comparison = "--compare" in arguments
+    parser = argparse.ArgumentParser(prog="run_solvers.sh" if comparison else None,
+                                     description="Run selected solvers on Set I and/or Set II and compare results."
+                                     if comparison else __doc__)
+    parser.add_argument("--compare", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--solver", required=comparison,
+                        help="Comma-separated backend names or solver filenames; all selects every backend")
+    parser.add_argument("--set", dest="sets", type=parse_sets,
+                        default=("I", "II") if comparison else None,
+                        help="I, II, or I,II (shell default: both sets, including all Set I files)")
     parser.add_argument("--dataset-dir", type=Path, default=ROOT / "dataset/data")
     parser.add_argument("--time-limit", type=float, default=120)
     parser.add_argument("--memory-limit-mb", type=int, default=4096,
                         help="Maximum combined worker/descendant RSS; 0 disables the guard (default: 4096 MB)")
-    parser.add_argument("--jobs", type=int, default=2)
-    parser.add_argument("--cp-workers", type=int,
-                        help="CP Optimizer threads per run; defaults to engine configuration")
-    parser.add_argument("--output", type=Path, default=ROOT / "benchmark_results")
+    parser.add_argument("--jobs", type=int, default=1 if comparison else 2)
+    parser.add_argument("--cp-workers", type=int, default=1 if comparison else None,
+                        help="CP Optimizer threads per run; shell default: 1; otherwise engine configuration")
+    parser.add_argument("--output", type=Path, default=ROOT / "benchmark_results" / "solver_comparison"
+                        if comparison else ROOT / "benchmark_results")
     parser.add_argument("--resume", type=Path, help="Continue an existing results folder, skipping completed runs")
     parser.add_argument("--retry-overruns", action="store_true",
                         help="With --resume, archive and retry delayed stops, SIGKILL exits, and missing running locations")
@@ -567,7 +694,9 @@ def main():
                         default=os.environ.get("CPO_EXECFILE", str(STUDIO_CP) if STUDIO_CP.is_file() else None),
                         help="CP Optimizer executable; defaults to installed Linux Studio engine when available")
     parser.add_argument("--license", type=Path, default=os.environ.get("GRB_LICENSE_FILE", "/mnt/c/users/khoin/downloads/gurobi.lic"))
-    parser.add_argument("--solvers", nargs="+", choices=BACKENDS, default=list(BACKENDS))
+    parser.add_argument("--solvers", nargs="+", choices=BACKENDS)
+    parser.add_argument("--renewable-encoding", choices=("amo", "res_uni"), default="amo",
+                        help="CPM2 renewable encoding; res-uni also has distinct SAT and MaxSAT backend keys")
     parser.add_argument("--worker", choices=BACKENDS, help=argparse.SUPPRESS)
     parser.add_argument("--maxsat-upper-bound", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--cpm2-upper-bound", type=int,
@@ -580,11 +709,22 @@ def main():
                         help="Parent wall and RSS guard sampling interval in seconds")
     parser.add_argument("--instance", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--snapshot", type=Path, help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    args = parser.parse_args(arguments)
+    if args.solver is not None:
+        if args.solvers is not None:
+            parser.error("use either --solver or --solvers")
+        try:
+            args.solvers = parse_solver_selection(args.solver)
+        except ValueError as error:
+            parser.error(str(error))
+    elif args.solvers is None:
+        args.solvers = [name for name in BACKENDS if not name.endswith("_res_uni")]
     if len(set(args.solvers)) != len(args.solvers):
         parser.error("solver list must not contain duplicates")
-    if args.time_limit <= 0 or args.jobs < 1 or args.memory_limit_mb < 0:
+    if not math.isfinite(args.time_limit) or args.time_limit <= 0 or args.jobs < 1 or args.memory_limit_mb < 0:
         parser.error("time-limit and jobs must be positive; memory limit must be nonnegative")
+    if not math.isfinite(args.poll_interval) or args.poll_interval <= 0:
+        parser.error("poll-interval must be finite and positive")
     if args.cp_workers is not None and args.cp_workers < 1:
         parser.error("cp-workers must be positive")
     if not math.isfinite(args.heuristic_time_limit) or args.heuristic_time_limit <= 0:
@@ -604,7 +744,10 @@ def main():
     if (args.retry_overruns or args.retry_cp_errors or args.retry_solvers) and not args.resume:
         parser.error("retry options require --resume")
     args.dataset_dir = args.dataset_dir.resolve()
-    files = sorted(p for p in args.dataset_dir.rglob("*.json") if p.name != "test.json")
+    try:
+        files = select_instances(args.dataset_dir, args.sets)
+    except ValueError as error:
+        parser.error(str(error))
     if not files:
         parser.error("no dataset JSON files found")
     results = []
@@ -617,6 +760,8 @@ def main():
             parser.error("resume requires the same predefined MaxSAT upper bound")
         if manifest.get("cpm2_upper_bound") != args.cpm2_upper_bound:
             parser.error("resume requires the same predefined CPM2 upper bound")
+        if manifest.get("renewable_encoding", "amo") != args.renewable_encoding:
+            parser.error("resume requires the same renewable encoding")
         if (manifest.get("maxsat_heuristic_ub", False) != args.maxsat_heuristic_ub
                 or (args.maxsat_heuristic_ub
                     and manifest.get("heuristic_time_limit") != args.heuristic_time_limit)):
@@ -666,8 +811,13 @@ def main():
                        for backend in args.solvers)
         if args.maxsat_heuristic_ub:
             sources.append(ROOT / "solver/schedule_upper_bound.py")
+        if any(backend in CPM2_BACKENDS for backend in args.solvers):
+            sources.append(ROOT / "solver/renewable_res_uni.py")
+        if args.compare:
+            sources.append(ROOT / "run_solvers.sh")
         manifest = {"dataset_dir": str(args.dataset_dir), "instances": [str(p) for p in files],
                     "maxsat_upper_bound": args.maxsat_upper_bound,
+                    "renewable_encoding": args.renewable_encoding,
                     "cpm2_upper_bound": args.cpm2_upper_bound,
                     "maxsat_heuristic_ub": args.maxsat_heuristic_ub,
                     "heuristic_time_limit": args.heuristic_time_limit if args.maxsat_heuristic_ub else None,
@@ -684,6 +834,8 @@ def main():
                     "input_sha256": {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in files},
                     "source_sha256": {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
                                       for p in sources if p.is_file()}}
+    if args.sets is not None:
+        manifest.update(sets=args.sets, comparison=args.compare)
     total = len(files) * len(args.solvers)
     write_json(folder / "manifest.json", manifest)
     print(f"{len(files)} instances, {total} runs, limit {args.time_limit:g}s/run, {args.jobs} jobs", flush=True)
@@ -692,7 +844,9 @@ def main():
     print(f"Already completed: {len(results)}; remaining: {total - len(results)}", flush=True)
     with (folder / "results.jsonl").open("a") as output, ThreadPoolExecutor(max_workers=args.jobs) as executor:
         futures = [executor.submit(run_one, args, path, solver, folder)
-                   for path in files for solver in args.solvers
+                   for index, path in enumerate(files)
+                   for solver in (args.solvers[index % len(args.solvers):] + args.solvers[:index % len(args.solvers)]
+                                  if args.compare else args.solvers)
                    if (str(path), solver) not in completed]
         for future in as_completed(futures):
             result = future.result()
@@ -708,8 +862,15 @@ def main():
                   f"stage={result.get('timeout_stage', result['stage'])} "
                   f"stop={result.get('stop_reason')}", flush=True)
             write_summary(folder, results)
+            if args.compare:
+                (folder / "comparison.md").write_text(
+                    comparison_markdown(args.dataset_dir, files, args.solvers, results))
     summary = write_summary(folder, results)
     print(f"Complete: {json.dumps(summary['statuses'])}", flush=True)
+    if args.compare:
+        table = comparison_markdown(args.dataset_dir, files, args.solvers, results)
+        (folder / "comparison.md").write_text(table)
+        print("\n" + table, flush=True)
 
 
 if __name__ == "__main__":
